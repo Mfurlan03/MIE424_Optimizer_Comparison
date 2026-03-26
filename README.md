@@ -15,4 +15,4 @@ Experiments are repeated across multiple random seeds to evaluate stability.
    pip install torch torchvision matplotlib numpy
 
 2. Run:
-   Optimizer Comparison on MNIST.ipynb
+   python optimizer_comparison_on_mnist.py 
