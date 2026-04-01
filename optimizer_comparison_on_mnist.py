@@ -219,3 +219,264 @@ plt.ylabel("L2 Weight Norm")
 plt.title("Weight Norm (Mean ± Std)")
 plt.grid(axis="y")
 plt.show()
+
+from sklearn.decomposition import PCA
+from scipy import stats
+from itertools import combinations
+from matplotlib.colors import ListedColormap, BoundaryNorm
+from matplotlib.lines import Line2D
+
+def train_model_with_tracking(optimizer_name):
+    model = MLP().to(device)
+    criterion = nn.CrossEntropyLoss()
+
+    if optimizer_name == "SGD":
+        optimizer = optim.SGD(model.parameters(), lr=LR_CONFIG["SGD"])
+    elif optimizer_name == "Adam":
+        optimizer = optim.Adam(model.parameters(), lr=LR_CONFIG["Adam"])
+    elif optimizer_name == "RMSprop":
+        optimizer = optim.RMSprop(model.parameters(), lr=LR_CONFIG["RMSprop"])
+
+    losses = []
+    grad_norms = []
+    update_norms = []
+
+    for epoch in range(EPOCHS):
+        model.train()
+        running_loss = 0.0
+        total = 0
+
+        epoch_grad = []
+        epoch_update = []
+
+        for images, labels in train_loader:
+            images, labels = images.to(device), labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+
+            grad_sq = 0.0
+            for p in model.parameters():
+                if p.grad is not None:
+                    grad_sq += torch.sum(p.grad.detach() ** 2).item()
+            epoch_grad.append(math.sqrt(grad_sq))
+
+            params_before = [p.detach().clone() for p in model.parameters()]
+            optimizer.step()
+
+            update_sq = 0.0
+            for p_before, p_after in zip(params_before, model.parameters()):
+                delta = p_after.detach() - p_before
+                update_sq += torch.sum(delta ** 2).item()
+            epoch_update.append(math.sqrt(update_sq))
+
+            running_loss += loss.item() * labels.size(0)
+            total += labels.size(0)
+
+        losses.append(running_loss / total)
+        grad_norms.append(np.mean(epoch_grad))
+        update_norms.append(np.mean(epoch_update))
+
+    acc = evaluate_accuracy(model)
+    norm = compute_weight_norm(model)
+
+    return {
+        "model": model,
+        "losses": losses,
+        "acc": acc,
+        "norm": norm,
+        "grad_norms": grad_norms,
+        "update_norms": update_norms,
+    }
+
+optimizers = ["SGD", "Adam", "RMSprop"]
+tracked_results = {}
+
+for opt in optimizers:
+    all_losses = []
+    accs = []
+    norms = []
+    grad_vals = []
+    update_vals = []
+    models = []
+
+    for seed in SEEDS:
+        set_seed(seed)
+        result = train_model_with_tracking(opt)
+
+        all_losses.append(result["losses"])
+        accs.append(result["acc"])
+        norms.append(result["norm"])
+        grad_vals.append(result["grad_norms"])
+        update_vals.append(result["update_norms"])
+        models.append(result["model"])
+
+    tracked_results[opt] = {
+        "mean_loss": np.mean(all_losses, axis=0),
+        "std_loss": np.std(all_losses, axis=0),
+        "mean_acc": np.mean(accs),
+        "std_acc": np.std(accs),
+        "accs": np.array(accs),
+        "mean_norm": np.mean(norms),
+        "std_norm": np.std(norms),
+        "norms": np.array(norms),
+        "models": models,
+        "mean_grad": np.mean(grad_vals, axis=0),
+        "std_grad": np.std(grad_vals, axis=0),
+        "mean_update": np.mean(update_vals, axis=0),
+        "std_update": np.std(update_vals, axis=0),
+    }
+
+def extract_features(model, loader, max_samples=3000):
+    model.eval()
+    feats, labels = [], []
+    count = 0
+
+    with torch.no_grad():
+        for images, y in loader:
+            images = images.to(device)
+            h = model.net[0:5](images)
+
+            feats.append(h.cpu().numpy())
+            labels.append(y.numpy())
+            count += y.size(0)
+
+            if count >= max_samples:
+                break
+
+    X = np.vstack(feats)[:max_samples]
+    y = np.concatenate(labels)[:max_samples]
+    return X, y
+
+
+colors = [
+    "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00",
+    "#ffff33", "#a65628", "#f781bf", "#999999", "#17becf"
+]
+
+cmap = ListedColormap(colors)
+bounds = np.arange(-0.5, 10.5, 1)
+norm = BoundaryNorm(bounds, cmap.N)
+
+legend = [
+    Line2D([0], [0], marker='o', color='w', label=str(i),
+           markerfacecolor=colors[i], markersize=8)
+    for i in range(10)
+]
+
+fig, axes = plt.subplots(3, 1, figsize=(6, 12))
+
+for ax, opt in zip(axes, optimizers):
+    model = tracked_results[opt]["models"][0]
+    X, y = extract_features(model, test_loader)
+
+    pca = PCA(n_components=2)
+    X2 = pca.fit_transform(X)
+    var = pca.explained_variance_ratio_
+
+    ax.scatter(X2[:, 0], X2[:, 1], c=y, cmap=cmap, norm=norm, s=10, alpha=0.7)
+    ax.set_title(opt)
+    ax.set_xlabel(f"PC1 ({var[0]:.1%})")
+    ax.set_ylabel(f"PC2 ({var[1]:.1%})")
+    ax.grid(alpha=0.3)
+
+fig.legend(
+    handles=legend,
+    title="Digit",
+    loc="lower center",
+    ncol=5,
+    bbox_to_anchor=(0.5, -0.02)
+)
+
+plt.tight_layout(rect=[0, 0.05, 1, 1])
+plt.show()
+
+def get_weights(model):
+    w = []
+    for name, p in model.named_parameters():
+        if "weight" in name:
+            w.append(p.detach().cpu().numpy().ravel())
+    return np.concatenate(w)
+
+weights = {opt: get_weights(tracked_results[opt]["models"][0]) for opt in optimizers}
+all_w = np.concatenate(list(weights.values()))
+lim = np.max(np.abs(all_w))
+
+fig, axes = plt.subplots(3, 1, figsize=(6, 12), sharex=True)
+
+for i, (ax, opt) in enumerate(zip(axes, optimizers)):
+    ax.hist(weights[opt], bins=80, range=(-0.6, 0.6))
+    ax.set_title(opt)
+
+    if i == 2:
+        ax.set_xlabel("Weight value")
+
+    ax.set_ylabel("Frequency")
+    ax.set_xlim(-0.6, 0.6)
+    ax.grid(alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+epochs = np.arange(1, EPOCHS + 1)
+
+plt.figure(figsize=(8, 5))
+for opt in optimizers:
+    m = tracked_results[opt]["mean_grad"]
+    s = tracked_results[opt]["std_grad"]
+    plt.plot(epochs, m, label=opt)
+    plt.fill_between(epochs, m - s, m + s, alpha=0.2)
+
+plt.xlabel("Epoch")
+plt.ylabel("Gradient norm")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(8, 5))
+for opt in optimizers:
+    m = tracked_results[opt]["mean_update"]
+    s = tracked_results[opt]["std_update"]
+    plt.plot(epochs, m, label=opt)
+    plt.fill_between(epochs, m - s, m + s, alpha=0.2)
+
+plt.xlabel("Epoch")
+plt.ylabel("Update norm")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+def cohens_d(x, y):
+    nx, ny = len(x), len(y)
+    sx2, sy2 = np.var(x, ddof=1), np.var(y, ddof=1)
+    pooled = np.sqrt(((nx - 1)*sx2 + (ny - 1)*sy2) / (nx + ny - 2))
+    return (np.mean(x) - np.mean(y)) / pooled if pooled != 0 else np.nan
+
+
+def run_stats(name, data):
+    print("="*60)
+    print(name)
+    print("="*60)
+
+    groups = [data[o] for o in optimizers]
+    f, p = stats.f_oneway(*groups)
+    print(f"ANOVA: F={f:.4f}, p={p:.6f}")
+
+    pairs = list(combinations(optimizers, 2))
+    alpha = 0.05 / len(pairs)
+
+    for a, b in pairs:
+        t, pval = stats.ttest_ind(data[a], data[b], equal_var=False)
+        d = cohens_d(data[a], data[b])
+        print(f"{a} vs {b}: p={pval:.6f}, d={d:.3f}, sig={pval < alpha}")
+
+    print()
+
+
+acc_data = {o: tracked_results[o]["accs"] for o in optimizers}
+norm_data = {o: tracked_results[o]["norms"] for o in optimizers}
+
+run_stats("Test Accuracy", acc_data)
+run_stats("Weight Norm", norm_data)
