@@ -37,11 +37,11 @@ EPOCHS = 10
 
 LR_CONFIG = {
     "SGD": 0.01,
-    "Adam": 0.001,
-    "RMSprop": 0.001,
+    "Adam": 0.01,
+    "RMSprop": 0.01,
 }
 
-SEEDS = [0, 1, 2, 3, 4]
+SEEDS = [0, 1, 2, 3, 4] # To ensure consistent initialization across runs
 
 # 4. Data
 transform = transforms.ToTensor()
@@ -220,11 +220,15 @@ plt.title("Weight Norm (Mean ± Std)")
 plt.grid(axis="y")
 plt.show()
 
+# Imports for additional analysis
+
 from sklearn.decomposition import PCA
 from scipy import stats
 from itertools import combinations
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.lines import Line2D
+
+# Tracking various grad and update across epochs
 
 def train_model_with_tracking(optimizer_name):
     model = MLP().to(device)
@@ -291,6 +295,8 @@ def train_model_with_tracking(optimizer_name):
         "update_norms": update_norms,
     }
 
+# Getting tracking data
+
 optimizers = ["SGD", "Adam", "RMSprop"]
 tracked_results = {}
 
@@ -328,6 +334,8 @@ for opt in optimizers:
         "mean_update": np.mean(update_vals, axis=0),
         "std_update": np.std(update_vals, axis=0),
     }
+
+# 2D Principal Component Visualization
 
 def extract_features(model, loader, max_samples=3000):
     model.eval()
@@ -393,6 +401,8 @@ fig.legend(
 plt.tight_layout(rect=[0, 0.05, 1, 1])
 plt.show()
 
+# Histogram of weight distribution
+
 def get_weights(model):
     w = []
     for name, p in model.named_parameters():
@@ -420,6 +430,8 @@ for i, (ax, opt) in enumerate(zip(axes, optimizers)):
 plt.tight_layout()
 plt.show()
 
+# Gradient norms
+
 epochs = np.arange(1, EPOCHS + 1)
 
 plt.figure(figsize=(8, 5))
@@ -435,6 +447,8 @@ plt.legend()
 plt.grid(True)
 plt.show()
 
+# Update norms
+
 plt.figure(figsize=(8, 5))
 for opt in optimizers:
     m = tracked_results[opt]["mean_update"]
@@ -447,6 +461,8 @@ plt.ylabel("Update norm")
 plt.legend()
 plt.grid(True)
 plt.show()
+
+# Statistical Significance of Solutions being Different across Optimizers
 
 def cohens_d(x, y):
     nx, ny = len(x), len(y)
